@@ -104,6 +104,12 @@ namespace Microsoft.Xna.Framework.Media
 			}
 		}
 
+        internal long PCMPosition
+        {
+            get;
+            private set;
+        }
+
 		internal float Volume
 		{
 			set
@@ -139,7 +145,11 @@ namespace Microsoft.Xna.Framework.Media
 
 		private DynamicSoundEffectInstance soundStream;
 		private IntPtr vorbisFile;
-		private bool eof;
+        private bool eof;
+
+        private long loopStart;
+        private long loopEnd;
+        private int bytes_per_sample;
 
 		private const int MAX_SAMPLES = 2 * 2 * 48000;
 		private static byte[] vorbisBuffer = new byte[MAX_SAMPLES];
@@ -162,31 +172,61 @@ namespace Microsoft.Xna.Framework.Media
 		#region Constructors, Deconstructor, Dispose()
 
 		internal Song(string fileName)
-		{
-			Vorbisfile.ov_fopen(fileName, out vorbisFile);
-			Vorbisfile.vorbis_info fileInfo = Vorbisfile.ov_info(
-				vorbisFile,
-				0
-			);
+        {
+            Vorbisfile.ov_fopen(fileName, out vorbisFile);
+            Vorbisfile.vorbis_info fileInfo = Vorbisfile.ov_info(
+                vorbisFile,
+                0
+            );
 
-			// TODO: ov_comment() -flibit
-			Name = Path.GetFileNameWithoutExtension(fileName);
-			TrackNumber = 0;
+            // TODO: ov_comment() -flibit
+            Name = Path.GetFileNameWithoutExtension(fileName);
+            TrackNumber = 0;
 
-			Duration = TimeSpan.FromSeconds(
-				Vorbisfile.ov_time_total(vorbisFile, 0)
-			);
+            Duration = TimeSpan.FromSeconds(
+                Vorbisfile.ov_time_total(vorbisFile, 0)
+            );
 
-			soundStream = new DynamicSoundEffectInstance(
-				(int) fileInfo.rate,
-				(AudioChannels) fileInfo.channels
-			);
+            long total_samples = Vorbisfile.ov_pcm_total(vorbisFile, 0);
 
-			// FIXME: 60 is arbitrary for a 60Hz game -flibit
-			chunkSize = (int) (fileInfo.rate * fileInfo.channels / 60);
-			chunkStep = chunkSize / VisualizationData.Size;
+            Vorbisfile.vorbis_comment comments = Vorbisfile.ov_comment(vorbisFile, 0);
 
-			IsDisposed = false;
+            loopStart = 0;
+            loopEnd = (int)total_samples;
+            int loopLength = 0;
+
+            IntPtr ptr = comments.user_comments;
+            for (int ii = 0; ii < comments.comments; ii++)
+            {
+                IntPtr strPtr = (IntPtr)Marshal.PtrToStructure(ptr, typeof(IntPtr));
+                string comment = Marshal.PtrToStringAnsi(strPtr);
+
+                if (comment.StartsWith("LOOPSTART="))
+                    loopStart = Convert.ToInt32(comment.Substring("LOOPSTART=".Length));
+                else if (comment.StartsWith("LOOPLENGTH="))
+                    loopLength = Convert.ToInt32(comment.Substring("LOOPLENGTH=".Length));
+
+                ptr = new IntPtr(ptr.ToInt64() + IntPtr.Size);
+            }
+            if (loopStart > -1)
+            {
+                if (loopLength > 0)
+                    loopEnd = loopStart + loopLength;
+            }
+
+            PCMPosition = 0;
+            bytes_per_sample = fileInfo.channels * 2;
+
+            soundStream = new DynamicSoundEffectInstance(
+                (int)fileInfo.rate,
+                (AudioChannels)fileInfo.channels
+            );
+
+            // FIXME: 60 is arbitrary for a 60Hz game -flibit
+            chunkSize = (int)(fileInfo.rate * fileInfo.channels / 60);
+            chunkStep = chunkSize / VisualizationData.Size;
+
+            IsDisposed = false;
 		}
 
 		internal Song(string fileName, int durationMS) : this(fileName)
@@ -317,41 +357,76 @@ namespace Microsoft.Xna.Framework.Media
 
 		internal void QueueBuffer(object sender, EventArgs args)
 		{
-			int bs;
-			int cur = 0;
-			int total = 0;
-			do
-			{
-				cur = (int) Vorbisfile.ov_read(
-					vorbisFile,
-					bufferPtr + total,
-					4096,
-					0,
-					2,
-					1,
-					out bs
-				);
-				total += cur;
-			} while (cur > 0 && total < (MAX_SAMPLES - 4096));
+            if (loopStart > -1)
+            {
+                int bs;
+                long cur = 0;
+                int total = 0;
+                while (total < MAX_SAMPLES)
+                {
+                    cur = Vorbisfile.ov_read(
+                        vorbisFile,
+                        bufferPtr + total,
+                        Math.Min((int)Math.Min(4096, (loopEnd - PCMPosition) * bytes_per_sample), MAX_SAMPLES - total),
+                        0,
+                        2,
+                        1,
+                        out bs
+                    );
+                    PCMPosition += (cur / bytes_per_sample);
+                    if (PCMPosition >= loopEnd)
+                    {
+                        Vorbisfile.ov_pcm_seek(vorbisFile, loopStart);
+                        PCMPosition = loopStart;
+                    }
+                    total += (int)cur;
+                }
 
-			// If we're at the end of the file, stop!
-			if (total == 0)
-			{
-				eof = true;
-				if ((sender as DynamicSoundEffectInstance).PendingBufferCount == 0)
-				{
-					soundStream.BufferNeeded -= QueueBuffer;
-					MediaPlayer.SongFinishedPlaying();
-				}
-				return;
-			}
+                // Send the filled buffer to the stream.
+                soundStream.SubmitBuffer(
+                    vorbisBuffer,
+                    0,
+                    total
+                );
+            }
+            else
+            {
+                int bs;
+                int cur = 0;
+                int total = 0;
+                do
+                {
+                    cur = (int)Vorbisfile.ov_read(
+                        vorbisFile,
+                        bufferPtr + total,
+                        4096,
+                        0,
+                        2,
+                        1,
+                        out bs
+                    );
+                    total += cur;
+                } while (cur > 0 && total < (MAX_SAMPLES - 4096));
 
-			// Send the filled buffer to the stream.
-			soundStream.SubmitBuffer(
-				vorbisBuffer,
-				0,
-				total
-			);
+                // If we're at the end of the file, stop!
+                if (total == 0)
+                {
+                    eof = true;
+                    if ((sender as DynamicSoundEffectInstance).PendingBufferCount == 0)
+                    {
+                        soundStream.BufferNeeded -= QueueBuffer;
+                        MediaPlayer.SongFinishedPlaying();
+                    }
+                    return;
+                }
+
+                // Send the filled buffer to the stream.
+                soundStream.SubmitBuffer(
+                    vorbisBuffer,
+                    0,
+                    total
+                );
+            }
 		}
 
 		#endregion
