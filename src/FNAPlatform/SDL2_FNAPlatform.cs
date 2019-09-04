@@ -190,7 +190,7 @@ namespace Microsoft.Xna.Framework
 				GraphicsDeviceManager.DefaultBackBufferHeight,
 				initFlags
 			);
-			INTERNAL_SetIcon(window, title);
+			INTERNAL_SetIcon(window);
 
 			// Disable the screensaver.
 			SDL.SDL_DisableScreenSaver();
@@ -425,7 +425,7 @@ namespace Microsoft.Xna.Framework
 			);
 		}
 
-		private static void INTERNAL_SetIcon(IntPtr window, string title)
+		private static void INTERNAL_SetIcon(IntPtr window)
 		{
 			string fileIn = String.Empty;
 
@@ -435,7 +435,7 @@ namespace Microsoft.Xna.Framework
 			 */
 			try
 			{
-				fileIn = INTERNAL_GetIconName(title, ".png");
+				fileIn = INTERNAL_GetIconName("Icon", ".png");
 				if (!String.IsNullOrEmpty(fileIn))
 				{
 					IntPtr icon = SDL_image.IMG_Load(fileIn);
@@ -449,7 +449,7 @@ namespace Microsoft.Xna.Framework
 				// Not that big a deal guys.
 			}
 
-			fileIn = INTERNAL_GetIconName(title, ".bmp");
+			fileIn = INTERNAL_GetIconName("Icon", ".bmp");
 			if (!String.IsNullOrEmpty(fileIn))
 			{
 				IntPtr icon = SDL.SDL_LoadBMP(fileIn);
@@ -461,48 +461,43 @@ namespace Microsoft.Xna.Framework
 		private static string INTERNAL_GetIconName(string title, string extension)
 		{
 			string fileIn = String.Empty;
-			if (File.Exists(title + extension))
-			{
-				// If the title and filename work, it just works. Fine.
-				fileIn = title + extension;
-			}
-			else
-			{
-				// But sometimes the title has invalid characters inside.
 
-				/* In addition to the filesystem's invalid charset, we need to
-				 * blacklist the Windows standard set too, no matter what.
-				 * -flibit
-				 */
-				char[] hardCodeBadChars = new char[]
-				{
-					'<',
-					'>',
-					':',
-					'"',
-					'/',
-					'\\',
-					'|',
-					'?',
-					'*'
-				};
-				List<char> badChars = new List<char>();
-				badChars.AddRange(Path.GetInvalidFileNameChars());
-				badChars.AddRange(hardCodeBadChars);
 
-				string stripChars = title;
-				foreach (char c in badChars)
-				{
-					stripChars = stripChars.Replace(c.ToString(), "");
-				}
-				stripChars += extension;
+            // But sometimes the title has invalid characters inside.
 
-				if (File.Exists(stripChars))
-				{
-					fileIn = stripChars;
-				}
-			}
-			return fileIn;
+            /* In addition to the filesystem's invalid charset, we need to
+             * blacklist the Windows standard set too, no matter what.
+             * -flibit
+             */
+            char[] hardCodeBadChars = new char[]
+            {
+                    '<',
+                    '>',
+                    ':',
+                    '"',
+                    '/',
+                    '\\',
+                    '|',
+                    '?',
+                    '*'
+            };
+            List<char> badChars = new List<char>();
+            badChars.AddRange(Path.GetInvalidFileNameChars());
+            badChars.AddRange(hardCodeBadChars);
+
+            string stripChars = title;
+            foreach (char c in badChars)
+            {
+                stripChars = stripChars.Replace(c.ToString(), "");
+            }
+            stripChars += extension;
+
+            if (File.Exists(stripChars))
+            {
+                fileIn = stripChars;
+            }
+
+            return fileIn;
 		}
 
 		/* FIXME: SDL2 bug!
