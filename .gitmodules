@@ -3,7 +3,8 @@
 	url = git://github.com/flibitijibibo/SDL2-CS.git
 [submodule "lib/FAudio"]
 	path = lib/FAudio
-	url = git://github.com/FNA-XNA/FAudio.git
+	url = https://github.com/audinowho/FAudio.git
+	branch = OggComment
 [submodule "lib/MojoShader"]
 	path = lib/MojoShader
 	url = git://github.com/FNA-XNA/MojoShader.git
