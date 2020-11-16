@@ -420,7 +420,7 @@ namespace Microsoft.Xna.Framework
 			AfterLoop();
 		}
 
-		public async void RunAsync()
+		public async Task RunAsync()
 		{
 			AssertNotDisposed();
 
@@ -434,7 +434,7 @@ namespace Microsoft.Xna.Framework
 			BeforeLoop();
 
 			gameTimer = Stopwatch.StartNew();
-			await Task.Run(RunLoopAsync);
+			await RunLoopAsync();
 
 			EndRun();
 			AfterLoop();
@@ -573,7 +573,7 @@ namespace Microsoft.Xna.Framework
 			}
 		}
 
-		public async void TickAsync()
+		public async Task TickAsync()
 		{
 		/* NOTE: This code is very sensitive and can break very badly,
 		 * even with what looks like a safe change. Be sure to test
@@ -1022,7 +1022,7 @@ namespace Microsoft.Xna.Framework
 			Exit();
 		}
 
-		private async void RunLoopAsync()
+		private async Task RunLoopAsync()
 		{
 			/* Some platforms (i.e. Emscripten) don't support
 			 * indefinite while loops, so instead we have to
@@ -1040,6 +1040,9 @@ namespace Microsoft.Xna.Framework
 
 			while (RunApplication)
 			{
+				// For some reason PollEvents causes editor windows to update on windows and mac, but not linux
+				// In these async cases, we will allow them to update with this Yield.
+				await Task.Delay(1);
 				FNAPlatform.PollEvents(
 					this,
 					ref currentAdapter,
@@ -1047,7 +1050,7 @@ namespace Microsoft.Xna.Framework
 					textInputControlRepeat,
 					ref textInputSuppress
 				);
-				await Task.Run(Tick);
+				await TickAsync();
 			}
 			Exit();
 		}
