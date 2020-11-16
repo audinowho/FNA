@@ -17,6 +17,7 @@ using Microsoft.Xna.Framework.Input;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input.Touch;
+using System.Threading.Tasks;
 #endregion
 
 namespace Microsoft.Xna.Framework
@@ -419,6 +420,26 @@ namespace Microsoft.Xna.Framework
 			AfterLoop();
 		}
 
+		public async void RunAsync()
+		{
+			AssertNotDisposed();
+
+			if (!hasInitialized)
+			{
+				DoInitialize();
+				hasInitialized = true;
+			}
+
+			BeginRun();
+			BeforeLoop();
+
+			gameTimer = Stopwatch.StartNew();
+			await Task.Run(RunLoopAsync);
+
+			EndRun();
+			AfterLoop();
+		}
+
 		public void Tick()
 		{
 			/* NOTE: This code is very sensitive and can break very badly,
@@ -449,6 +470,139 @@ namespace Microsoft.Xna.Framework
 				 * fluctuation is an acceptable result.
 				 */
 				System.Threading.Thread.Sleep(sleepTime);
+
+				goto RetryTick;
+			}
+
+			// Do not allow any update to take longer than our maximum.
+			if (accumulatedElapsedTime > MaxElapsedTime)
+			{
+				accumulatedElapsedTime = MaxElapsedTime;
+			}
+
+			if (IsFixedTimeStep)
+			{
+				gameTime.ElapsedGameTime = TargetElapsedTime;
+				int stepCount = 0;
+
+				// Perform as many full fixed length time steps as we can.
+				while (accumulatedElapsedTime >= TargetElapsedTime)
+				{
+					gameTime.TotalGameTime += TargetElapsedTime;
+					accumulatedElapsedTime -= TargetElapsedTime;
+					stepCount += 1;
+
+					AssertNotDisposed();
+					Update(gameTime);
+				}
+
+				// Every update after the first accumulates lag
+				updateFrameLag += Math.Max(0, stepCount - 1);
+
+				/* If we think we are running slowly, wait
+				 * until the lag clears before resetting it
+				 */
+				if (gameTime.IsRunningSlowly)
+				{
+					if (updateFrameLag == 0)
+					{
+						gameTime.IsRunningSlowly = false;
+					}
+				}
+				else if (updateFrameLag >= 5)
+				{
+					/* If we lag more than 5 frames,
+					 * start thinking we are running slowly.
+					 */
+					gameTime.IsRunningSlowly = true;
+				}
+
+				/* Every time we just do one update and one draw,
+				 * then we are not running slowly, so decrease the lag.
+				 */
+				if (stepCount == 1 && updateFrameLag > 0)
+				{
+					updateFrameLag -= 1;
+				}
+
+				/* Draw needs to know the total elapsed time
+				 * that occured for the fixed length updates.
+				 */
+				gameTime.ElapsedGameTime = TimeSpan.FromTicks(TargetElapsedTime.Ticks * stepCount);
+			}
+			else
+			{
+				// Perform a single variable length update.
+				if (forceElapsedTimeToZero)
+				{
+					/* When ResetElapsedTime is called,
+					 * Elapsed is forced to zero and
+					 * Total is ignored entirely.
+					 * -flibit
+					 */
+					gameTime.ElapsedGameTime = TimeSpan.Zero;
+					forceElapsedTimeToZero = false;
+				}
+				else
+				{
+					gameTime.ElapsedGameTime = accumulatedElapsedTime;
+					gameTime.TotalGameTime += gameTime.ElapsedGameTime;
+				}
+
+				accumulatedElapsedTime = TimeSpan.Zero;
+				AssertNotDisposed();
+				Update(gameTime);
+			}
+
+			// Draw unless the update suppressed it.
+			if (suppressDraw)
+			{
+				suppressDraw = false;
+			}
+			else
+			{
+				/* Draw/EndDraw should not be called if BeginDraw returns false.
+				 * http://stackoverflow.com/questions/4054936/manual-control-over-when-to-redraw-the-screen/4057180#4057180
+				 * http://stackoverflow.com/questions/4235439/xna-3-1-to-4-0-requires-constant-redraw-or-will-display-a-purple-screen
+				 */
+				if (BeginDraw())
+				{
+					Draw(gameTime);
+					EndDraw();
+				}
+			}
+		}
+
+		public async void TickAsync()
+		{
+		/* NOTE: This code is very sensitive and can break very badly,
+		 * even with what looks like a safe change. Be sure to test
+		 * any change fully in both the fixed and variable timestep
+		 * modes across multiple devices and platforms.
+		 */
+
+		RetryTick:
+
+			// Advance the accumulated elapsed time.
+			long currentTicks = gameTimer.Elapsed.Ticks;
+			accumulatedElapsedTime += TimeSpan.FromTicks(currentTicks - previousTicks);
+			previousTicks = currentTicks;
+
+			/* If we're in the fixed timestep mode and not enough time has elapsed
+			 * to perform an update we sleep off the the remaining time to save battery
+			 * life and/or release CPU time to other threads and processes.
+			 */
+			if (IsFixedTimeStep && accumulatedElapsedTime < TargetElapsedTime)
+			{
+				int sleepTime = (
+					(int)(TargetElapsedTime - accumulatedElapsedTime).TotalMilliseconds
+				);
+
+				/* NOTE: While sleep can be inaccurate in general it is
+				 * accurate enough for frame limiting purposes if some
+				 * fluctuation is an acceptable result.
+				 */
+				await Task.Delay(sleepTime);
 
 				goto RetryTick;
 			}
@@ -864,6 +1018,36 @@ namespace Microsoft.Xna.Framework
 					ref textInputSuppress
 				);
 				Tick();
+			}
+			Exit();
+		}
+
+		private async void RunLoopAsync()
+		{
+			/* Some platforms (i.e. Emscripten) don't support
+			 * indefinite while loops, so instead we have to
+			 * surrender control to the platform's main loop.
+			 * -caleb
+			 */
+			if (FNAPlatform.NeedsPlatformMainLoop())
+			{
+				/* This breaks control flow and jumps
+				 * directly into the platform main loop.
+				 * Nothing below this call will be executed.
+				 */
+				FNAPlatform.RunPlatformMainLoop(this);
+			}
+
+			while (RunApplication)
+			{
+				FNAPlatform.PollEvents(
+					this,
+					ref currentAdapter,
+					textInputControlDown,
+					textInputControlRepeat,
+					ref textInputSuppress
+				);
+				await Task.Run(Tick);
 			}
 			Exit();
 		}
